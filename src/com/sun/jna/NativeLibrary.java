@@ -135,6 +135,9 @@ public class NativeLibrary {
     }
 
     private static final int DEFAULT_OPEN_OPTIONS = -1;
+    // Default values for AIX fall-back case, as inspired by: http://www-01.ibm.com/support/docview.wss?uid=swg21273119
+    private static final int RTLD_LAZY_GLOBAL = 0x00000004 | 0x00010000;
+    private static final int RTLD_MEMBER = 0x00040000;
     private static int openFlags(Map<String, ?> options) {
         Object opt = options.get(Library.OPTION_OPEN_FLAGS);
         if (opt instanceof Number) {
@@ -192,7 +195,7 @@ public class NativeLibrary {
         } catch(UnsatisfiedLinkError e) {
             // Add the system paths back for all fallback searching
             if (Native.DEBUG_LOAD) {
-                System.out.println("Adding system paths: " + librarySearchPath);
+                System.out.println("Loading from " + libraryPath + " failed with '" + e.toString() + "'!.. Adding system paths: " + librarySearchPath);
             }
             searchPath.addAll(librarySearchPath);
         }
@@ -209,6 +212,9 @@ public class NativeLibrary {
                 }
             }
         } catch(UnsatisfiedLinkError e) {
+            if (Native.DEBUG_LOAD) {
+                System.out.println("Loading from " + libraryPath + " failed with '" + e.toString() + "'!..");
+            }
             // For android, try to "preload" the library using
             // System.loadLibrary(), which looks into the private /data/data
             // path, not found in any properties
@@ -275,6 +281,27 @@ public class NativeLibrary {
                     try {
                         handle = Native.open(libraryPath, openFlags);
                     } catch(UnsatisfiedLinkError e2) {
+                        e = e2;
+                    }
+                }
+            }
+            else if (Platform.isAIX()) {
+                if (Native.DEBUG_LOAD) {
+                    System.out.println("AIX: Looking for 'lib' prefix, '.a' suffix, bit-specific 'shr.o' member object file");
+                }
+                libraryPath = findLibraryPath("lib" + libraryName + ".a", searchPath);
+                if (libraryPath != null) {
+                    // We assume the default object file name: "shr.o", or "shr_64.o"
+                    libraryPath = String.format("%s(shr%s.o)", libraryPath, (Platform.is64Bit() ? "_64" : ""));
+                    // Since we need to OR the "MEMBER" flag for this library to work, we need to reset the default
+                    int aixOpenFlags = ((openFlags == DEFAULT_OPEN_OPTIONS) ? RTLD_LAZY_GLOBAL : openFlags) | RTLD_MEMBER;
+                    if (Native.DEBUG_LOAD) {
+                        System.out.println("AIX: Trying '" + libraryPath + "' with openFlags=0x" + Long.toHexString(aixOpenFlags));
+                    }
+                    try {
+                        handle = Native.open(libraryPath, aixOpenFlags);
+                    } catch(UnsatisfiedLinkError e2) {
+                        System.out.println("AIX: Loading from '" + libraryPath + "' as MEMBER failed with '" + e2.toString() + "'!");
                         e = e2;
                     }
                 }
